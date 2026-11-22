@@ -7,6 +7,7 @@ import { pool } from '../db/index.js'
 import { registerRoutes } from './routes/index.js'
 import { registerStreamEndpoint } from './stream.js'
 import { MemoryNonceStore, PostgresNonceStore, type NonceStore } from '../auth.js'
+import { register as metricsRegister } from './metrics.js'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -76,6 +77,12 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // ── Liveness probe (issue #2) — no DB round trip ──
   app.get('/health', async () => ({ status: 'ok', contract: config.stellar.contractId || null }))
+
+  // ── Prometheus metrics (issues #528, #529) ──
+  app.get('/metrics', async (_req, reply) => {
+    reply.header('Content-Type', metricsRegister.contentType)
+    return metricsRegister.metrics()
+  })
 
   // ── Version endpoint (issue #64) — build metadata ──
   app.get('/version', async () => ({

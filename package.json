@@ -17,10 +17,16 @@
     "migrate": "tsx src/db/migrate.ts",
     "reindex": "tsx src/indexer/reindex.ts",
     "bench:events": "tsx scripts/bench-events-storage.ts",
+    "bench:api-latency": "tsx scripts/bench-api-latency.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "openapi:generate": "tsx scripts/generate-openapi-spec.ts",
+    "openapi:validate": "npm run openapi:generate && git diff --exit-code openapi.json",
+    "license:check": "tsx scripts/check-licenses.ts",
+    "audit:schema-drift": "tsx scripts/audit-schema-drift.ts",
+    "clean:test-schemas": "tsx scripts/clean-test-schemas.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
@@ -29,7 +35,8 @@
     "@stellar/stellar-sdk": "^16.0.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.1.0",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "prom-client": "^15.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

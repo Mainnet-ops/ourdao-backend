@@ -45,6 +45,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Schema drift audit
+        run: npm run audit:schema-drift
+
       # Runs the full suite with v8 coverage instrumentation and enforces the
       # thresholds in vitest.config.ts (#79). Replaces the plain `npm test`
       # step — same tests, plus the report. Observed runtime delta on CI: a

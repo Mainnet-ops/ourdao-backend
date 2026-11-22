@@ -3,6 +3,7 @@ import { pool } from '../db/index.js'
 import { applyEvent } from './handlers.js'
 import { namedFields, type DecodedEvent } from '../stellar/events.js'
 import { DERIVED_TABLES, resetDaoTotals } from './derived-tables.js'
+import { reindexRunsCounter, reindexDurationHistogram } from '../api/metrics.js'
 
 interface EventLogRow {
   id: string
@@ -26,8 +27,12 @@ interface EventLogRow {
  * penalties, unweighted tallies) which this command repairs in one pass.
  *
  * Runs in a single transaction — the whole rebuild lands or none of it does.
+ *
+ * Issue #529: Increments ourdao_reindex_runs_total counter and observes
+ * ourdao_reindex_duration_seconds histogram on completion.
  */
 export async function reindexFromEventLog(): Promise<{ events: number }> {
+  const startTime = Date.now()
   const client: PoolClient = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -57,6 +62,12 @@ export async function reindexFromEventLog(): Promise<{ events: number }> {
     }
 
     await client.query('COMMIT')
+    
+    // Issue #529: record metrics on successful completion
+    const durationSeconds = (Date.now() - startTime) / 1000
+    reindexRunsCounter.inc()
+    reindexDurationHistogram.observe(durationSeconds)
+    
     return { events: rows.length }
   } catch (err) {
     await client.query('ROLLBACK')
