@@ -25,6 +25,40 @@ export class ReindexLockError extends Error {
     this.name = 'ReindexLockError'
   }
 }
+export interface ReindexOptions {
+  /** Replay inside the transaction, then ROLLBACK instead of COMMIT. */
+  dryRun?: boolean;
+}
+
+export interface TableDiff {
+  table: string;
+  before: number;
+  after: number;
+  delta: number;
+}
+
+export interface ReindexSummary {
+  dryRun: boolean;
+  eventsReplayed: number;
+  tables: TableDiff[];
+  quarantinedBefore: number;
+  quarantinedAfter: number;
+}
+
+// Replace with your real derived-table list (reuse the one your TRUNCATE uses).
+const QUARANTINE_TABLE = 'quarantined_events'; // <- your real name
+
+async function countRows(client: PoolClient, table: string): Promise<number> {
+  // table names come from our own constant list, never user input
+  const { rows } = await client.query(`SELECT COUNT(*)::int AS n FROM ${table}`);
+  return rows[0].n;
+}
+
+async function snapshotCounts(client: PoolClient, tables: string[]) {
+  const out: Record<string, number> = {};
+  for (const t of tables) out[t] = await countRows(client, t);
+  return out;
+}
 
 interface EventLogRow {
   id: string
