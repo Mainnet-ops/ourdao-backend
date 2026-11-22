@@ -3,6 +3,7 @@ import { exemptTransactionFromStatementTimeout, pool } from '../db/index.js'
 import { applyEvent } from './handlers.js'
 import { namedFields, type DecodedEvent } from '../stellar/events.js'
 import { DERIVED_TABLES, resetDaoTotals } from './derived-tables.js'
+import { reindexRunsCounter, reindexDurationHistogram } from '../api/metrics.js'
 import { notifyStreamClientsAfterCommit, type StreamChannel } from '../api/stream.js'
 import { createHistoryCache } from '../api/history-cache.js'
 import { invalidateMembersListCache } from '../cache/redis.js'
@@ -85,11 +86,12 @@ export interface ReindexOptions {
  * detected ledger discontinuity, and for historical-data repairs.
  *
  * Runs in a single transaction — the whole rebuild lands or none of it does.
- * Memory usage is bounded via keyset pagination over (ledger, id) so large
- * event logs can be reindexed without buffering the full dataset in Node memory.
- * Serialized across concurrent reindex/worker operations with a Postgres advisory lock.
+ *
+ * Issue #529: Increments ourdao_reindex_runs_total counter and observes
+ * ourdao_reindex_duration_seconds histogram on completion.
  */
-export async function reindexFromEventLog(options?: ReindexOptions): Promise<{ events: number }> {
+export async function reindexFromEventLog(): Promise<{ events: number }> {
+  const startTime = Date.now()
   const client: PoolClient = await pool.connect()
   let lockAcquired = false
   let processed = 0
@@ -224,7 +226,13 @@ export async function reindexFromEventLog(options?: ReindexOptions): Promise<{ e
     )
 
     await client.query('COMMIT')
-    await invalidateMembersListCache()
+    
+    // Issue #529: record metrics on successful completion
+    const durationSeconds = (Date.now() - startTime) / 1000
+    reindexRunsCounter.inc()
+    reindexDurationHistogram.observe(durationSeconds)
+    
+    return { events: rows.length }
   } catch (err) {
     if (lockAcquired) {
       try {

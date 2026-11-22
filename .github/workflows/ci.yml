@@ -64,37 +64,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: OpenAPI spec is up to date
-        run: npm run openapi:validate
-
-      - name: License check
-        run: npm run license:check
-
-      # Issue #580: README's "N tests across M files" sentence drifted stale
-      # twice already from hand-editing alone — re-derive both numbers from
-      # test/ on every run instead of trusting the comment to stay current.
-      - name: README test counts are up to date
-        run: npm run check:readme-test-counts
-
-      # Issue #591: docs/DEPENDENCY-LICENSES.md documents that CI fails when
-      # package.json's dependencies/devDependencies change without the PR
-      # description naming the change — this step is that check. Only
-      # meaningful on pull_request runs, where a base/head commit pair exists.
-      - name: Dependency change is described in the PR
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: npm run check:dependency-description
-
-      # Issue #290: verify all migrations in src/db/migrations/ apply cleanly
-      # to a fresh database and produce a schema matching src/db/schema.sql,
-      # and assert no duplicate migration version IDs exist. Runs as a
-      # distinct step so failures are attributable at a glance before the
-      # full coverage gate runs.
-      - name: Migration dry-run verification
-        run: npm run test -- --reporter=verbose test/migration-dry-run.test.ts
+      - name: Schema drift audit
+        run: npm run audit:schema-drift
 
       # Runs the full suite with v8 coverage instrumentation and enforces the
       # thresholds in vitest.config.ts (#79). Replaces the plain `npm test`

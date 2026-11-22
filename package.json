@@ -19,22 +19,16 @@
     "replay-failed": "tsx src/indexer/replay.ts",
     "reorg:clear": "tsx src/indexer/clear-reorg.ts",
     "bench:events": "tsx scripts/bench-events-storage.ts",
-    "measure:contract-cardinality": "tsx scripts/measure-contract-cardinality.ts",
-    "bench:api": "tsx scripts/bench-api-latency.ts",
-    "bench:stream": "tsx scripts/load-test-stream.ts",
-    "clean:test-schemas": "tsx scripts/clean-test-schemas.ts",
-    "check:member-activity-threshold": "tsx scripts/check-member-activity-threshold.ts",
-    "check:readme-test-counts": "tsx scripts/check-readme-test-counts.ts",
+    "bench:api-latency": "tsx scripts/bench-api-latency.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "openapi:generate": "tsx scripts/generate-openapi-spec.ts",
-    "openapi:validate": "tsx scripts/generate-openapi-spec.ts && git diff --exit-code openapi.json || (echo 'OpenAPI spec is out of sync. Run npm run openapi:generate and commit the changes.' && exit 1)",
+    "openapi:validate": "npm run openapi:generate && git diff --exit-code openapi.json",
     "license:check": "tsx scripts/check-licenses.ts",
-    "protection:check": "tsx scripts/branch-protection.ts check",
-    "protection:verify": "tsx scripts/branch-protection.ts verify",
-    "protection:apply": "tsx scripts/branch-protection.ts apply"
+    "audit:schema-drift": "tsx scripts/audit-schema-drift.ts",
+    "clean:test-schemas": "tsx scripts/clean-test-schemas.ts"
   },
   "dependencies": {
     "@fastify/compress": "^8.3.1",
@@ -53,10 +47,8 @@
     "@stellar/stellar-sdk": "^16.0.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.1.0",
-    "ioredis": "^5.4.1",
     "pg": "^8.13.1",
-    "prom-client": "^15.1.3",
-    "redis": "^6.2.1"
+    "prom-client": "^15.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

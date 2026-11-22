@@ -13,7 +13,9 @@ import { pool } from '../db/index.js'
 import { registerCachePolicy } from './cache-policy.js'
 import { clientErrorHandler, frameworkErrors, registerErrorHandling } from './errors.js'
 import { registerRoutes } from './routes/index.js'
-import { MemoryNonceStore, PostgresNonceStore, AuthFailureTracker, getAuthStats, type NonceStore } from '../auth.js'
+import { registerStreamEndpoint } from './stream.js'
+import { MemoryNonceStore, PostgresNonceStore, type NonceStore } from '../auth.js'
+import { register as metricsRegister } from './metrics.js'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -407,6 +409,12 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
       return { postgres, rpc }
     }
   )
+
+  // ── Prometheus metrics (issues #528, #529) ──
+  app.get('/metrics', async (_req, reply) => {
+    reply.header('Content-Type', metricsRegister.contentType)
+    return metricsRegister.metrics()
+  })
 
   // ── Version endpoint (issue #64) — build metadata ──
   app.get(

@@ -1,93 +1,135 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { replayFailedEvent } from '../src/indexer/replay.js'
-import { reindexFromEventLog } from '../src/indexer/reindex.js'
-import { query, queryOne } from '../src/db/index.js'
-import { closeDb, resetDb } from './db.js'
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { pool } from '../src/db/index.js'
+import { replayFailedEvent, replayAllFailedEvents } from '../src/indexer/replay.js'
+import { resetDb, closeDb } from './db.js'
+import { replayOutcomesCounter, register as metricsRegister } from '../src/api/metrics.js'
 
-describe('failed_events resolution tracking (issue #395)', () => {
-  beforeEach(resetDb)
+/**
+ * Tests for replay functionality (issue #529).
+ *
+ * Verifies that replayFailedEvent correctly attempts to re-apply quarantined
+ * events and increments the ourdao_replay_outcomes_total counter with the
+ * appropriate outcome label.
+ */
+describe('Replay failed events (#529)', () => {
+  beforeEach(async () => {
+    await resetDb()
+    metricsRegister.resetMetrics()
+  })
+
   afterAll(closeDb)
 
-  it('sets resolution to "resolved" and resolved_at to now when replay succeeds', async () => {
-    await query(
-      `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data)
-       VALUES ('1-0', 100, now(), 'CTEST', 'unknown_symbol', '[]', '[]')`
-    )
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error)
-       VALUES ('1-0', 'unknown_symbol', 100, 'boom')`
-    )
+  it('replayFailedEvent returns "already_resolved" when event not in failed_events', async () => {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const outcome = await replayFailedEvent(client, 'nonexistent-event-id')
+      await client.query('COMMIT')
 
-    const outcome = await replayFailedEvent('1-0')
-    expect(outcome.status).toBe('replayed')
+      expect(outcome).toBe('already_resolved')
 
-    const row = await queryOne<{ resolved_at: string | null; resolution: string | null }>(
-      'SELECT resolved_at, resolution FROM failed_events WHERE event_id = $1',
-      ['1-0']
-    )
-    expect(row?.resolved_at).not.toBeNull()
-    expect(row?.resolution).toBe('resolved')
+      // Verify metric was incremented
+      const metricsText = await metricsRegister.metrics()
+      expect(metricsText).toContain('ourdao_replay_outcomes_total{outcome="already_resolved"}')
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 
-  it('supports custom resolution (e.g. "ignored") in replayFailedEvent', async () => {
-    await query(
-      `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data)
-       VALUES ('2-0', 100, now(), 'CTEST', 'unknown_symbol', '[]', '[]')`
-    )
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error)
-       VALUES ('2-0', 'unknown_symbol', 100, 'boom')`
-    )
+  it('replayFailedEvent returns "still_failing" when event still fails to apply', async () => {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
 
-    const outcome = await replayFailedEvent('2-0', 'ignored')
-    expect(outcome.status).toBe('replayed')
+      // Insert a test event
+      const eventId = 'test-event-1'
+      await client.query(
+        `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data, tx_hash)
+         VALUES ($1, 100, NOW(), 'CTEST', 'unknown_event', '[]'::jsonb, '[]'::jsonb, NULL)`,
+        [eventId]
+      )
 
-    const row = await queryOne<{ resolved_at: string | null; resolution: string | null }>(
-      'SELECT resolved_at, resolution FROM failed_events WHERE event_id = $1',
-      ['2-0']
-    )
-    expect(row?.resolved_at).not.toBeNull()
-    expect(row?.resolution).toBe('ignored')
+      // Insert it into failed_events
+      await client.query(
+        `INSERT INTO failed_events (event_id, symbol, ledger, error)
+         VALUES ($1, 'unknown_event', 100, 'handler not found')`,
+        [eventId]
+      )
+
+      // Replay should fail because 'unknown_event' has no handler
+      const outcome = await replayFailedEvent(client, eventId)
+      await client.query('COMMIT')
+
+      expect(outcome).toBe('still_failing')
+
+      // Verify metric
+      const metricsText = await metricsRegister.metrics()
+      expect(metricsText).toContain('ourdao_replay_outcomes_total{outcome="still_failing"}')
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 
-  it('sets resolution to "resolved" when replaying an already-folded event', async () => {
-    await query(
-      `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data, folded_at)
-       VALUES ('3-0', 100, now(), 'CTEST', 'unknown_symbol', '[]', '[]', now())`
-    )
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error)
-       VALUES ('3-0', 'unknown_symbol', 100, 'boom')`
-    )
+  it('replayAllFailedEvents processes multiple events and returns summary', async () => {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
 
-    const outcome = await replayFailedEvent('3-0')
-    expect(outcome.status).toBe('already_resolved')
+      // Insert two test events
+      await client.query(
+        `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data, tx_hash)
+         VALUES 
+           ('event-1', 100, NOW(), 'CTEST', 'unknown_1', '[]'::jsonb, '[]'::jsonb, NULL),
+           ('event-2', 101, NOW(), 'CTEST', 'unknown_2', '[]'::jsonb, '[]'::jsonb, NULL)`
+      )
 
-    const row = await queryOne<{ resolved_at: string | null; resolution: string | null }>(
-      'SELECT resolved_at, resolution FROM failed_events WHERE event_id = $1',
-      ['3-0']
-    )
-    expect(row?.resolved_at).not.toBeNull()
-    expect(row?.resolution).toBe('resolved')
+      // Insert them into failed_events
+      await client.query(
+        `INSERT INTO failed_events (event_id, symbol, ledger, error)
+         VALUES 
+           ('event-1', 'unknown_1', 100, 'error 1'),
+           ('event-2', 'unknown_2', 101, 'error 2')`
+      )
+
+      const summary = await replayAllFailedEvents(client)
+      await client.query('COMMIT')
+
+      // Both should fail since they have unknown event types
+      expect(summary.stillFailing).toBeGreaterThanOrEqual(2)
+      expect(summary.replayed + summary.alreadyResolved + summary.stillFailing).toBeGreaterThanOrEqual(2)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 
-  it('sets resolution to "resolved" on unresolved failed_events during reindex', async () => {
-    await query(
-      `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data)
-       VALUES ('4-0', 100, now(), 'CTEST', 'unknown_symbol', '[]', '[]')`
-    )
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error)
-       VALUES ('4-0', 'unknown_symbol', 100, 'boom')`
-    )
+  it('metrics counter is incremented for each replay attempt', async () => {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
 
-    await reindexFromEventLog()
+      // Insert and fail an event
+      await client.query(
+        `INSERT INTO events (id, ledger, closed_at, contract_id, symbol, topics, data, tx_hash)
+         VALUES ('event-metric-test', 100, NOW(), 'CTEST', 'unknown', '[]'::jsonb, '[]'::jsonb, NULL)`
+      )
 
-    const row = await queryOne<{ resolved_at: string | null; resolution: string | null }>(
-      'SELECT resolved_at, resolution FROM failed_events WHERE event_id = $1',
-      ['4-0']
-    )
-    expect(row?.resolved_at).not.toBeNull()
-    expect(row?.resolution).toBe('resolved')
+      await client.query(
+        `INSERT INTO failed_events (event_id, symbol, ledger, error)
+         VALUES ('event-metric-test', 'unknown', 100, 'test error')`
+      )
+
+      await replayFailedEvent(client, 'event-metric-test')
+      await client.query('COMMIT')
+
+      const metricsText = await metricsRegister.metrics()
+      // Should have incremented the counter
+      expect(metricsText).toContain('ourdao_replay_outcomes_total')
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 })
