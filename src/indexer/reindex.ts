@@ -4,6 +4,62 @@ import { applyEvent } from './handlers.js'
 import { namedFields, type DecodedEvent } from '../stellar/events.js'
 import { DERIVED_TABLES, resetDaoTotals } from './derived-tables.js'
 import { reindexRunsCounter, reindexDurationHistogram } from '../api/metrics.js'
+import { notifyStreamClientsAfterCommit, type StreamChannel } from '../api/stream.js'
+import { createHistoryCache } from '../api/history-cache.js'
+import { invalidateMembersListCache } from '../cache/redis.js'
+
+// Every acquisition pairs this key with `hashtext(current_schema())`, so the
+// lock is scoped to the schema the data lives in: one lock per deployment in
+// production (a single `public` schema), and one per worker schema in the
+// test suite, whose parallel workers would otherwise block one another
+// through the database-wide key.
+// Arbitrary fixed key for a session-level advisory lock, distinct from
+// MIGRATION_LOCK_KEY (0x0d40_0000). The indexer worker and reindex command
+// share this lock to ensure a reindex never races a live worker folding events.
+export const REINDEX_LOCK_KEY = 0x0d40_0001
+
+export class ReindexLockError extends Error {
+  constructor(
+    message = 'Cannot acquire reindex advisory lock (0x0d400001). Another reindex is in progress or the indexer worker is currently folding events. Stop the indexer worker before running reindex.'
+  ) {
+    super(message)
+    this.name = 'ReindexLockError'
+  }
+}
+export interface ReindexOptions {
+  /** Replay inside the transaction, then ROLLBACK instead of COMMIT. */
+  dryRun?: boolean;
+}
+
+export interface TableDiff {
+  table: string;
+  before: number;
+  after: number;
+  delta: number;
+}
+
+export interface ReindexSummary {
+  dryRun: boolean;
+  eventsReplayed: number;
+  tables: TableDiff[];
+  quarantinedBefore: number;
+  quarantinedAfter: number;
+}
+
+// Replace with your real derived-table list (reuse the one your TRUNCATE uses).
+const QUARANTINE_TABLE = 'quarantined_events'; // <- your real name
+
+async function countRows(client: PoolClient, table: string): Promise<number> {
+  // table names come from our own constant list, never user input
+  const { rows } = await client.query(`SELECT COUNT(*)::int AS n FROM ${table}`);
+  return rows[0].n;
+}
+
+async function snapshotCounts(client: PoolClient, tables: string[]) {
+  const out: Record<string, number> = {};
+  for (const t of tables) out[t] = await countRows(client, t);
+  return out;
+}
 
 interface EventLogRow {
   id: string
